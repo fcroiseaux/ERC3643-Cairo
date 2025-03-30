@@ -1,0 +1,245 @@
+#[cfg(test)]
+mod test_token {
+    use stark3643::token::IERC3643Token;
+    use stark3643::identity_registry::IIdentityRegistry;
+    use stark3643::identity_storage::IIdentityStorage;
+
+    use starknet::{ContractAddress, contract_address_const};
+    use core::array::ArrayTrait;
+
+    // Import snforge for testing
+    use snforge_std::{declare, start_prank, stop_prank, CheatTarget};
+
+    // Declare test constants
+    const NAME: felt252 = 'T-REX Token';
+    const SYMBOL: felt252 = 'TREX';
+    const INITIAL_SUPPLY: u256 = 1000000000000000000000000; // 1 million tokens with 18 decimals
+
+    #[test]
+    fn test_token_initialization() {
+        // Deploy all contracts
+        let (
+            owner, 
+            token_address, 
+            identity_registry_address, 
+            _identity_storage_address, 
+            _compliance_address, 
+            _claim_topics_registry_address, 
+            _trusted_issuers_registry_address
+        ) = setup_contracts();
+        
+        // Get the token contract dispatcher
+        let token = IERC3643Token::dispatcher(token_address);
+        
+        // Check basic token information
+        assert(token.name() == NAME, 'Invalid token name');
+        assert(token.symbol() == SYMBOL, 'Invalid token symbol');
+        assert(token.decimals() == 18, 'Invalid decimals');
+        assert(token.total_supply() == 0, 'Initial supply should be 0');
+        
+        // Check if the owner is set correctly
+        let owner_from_token = token.owner();
+        assert(owner_from_token == owner, 'Invalid owner');
+        
+        // Check if the identity registry is set correctly
+        assert(token.is_compliance_agent(owner), 'Owner should be agent');
+    }
+
+    #[test]
+    fn test_identity_registration() {
+        // Deploy all contracts
+        let (
+            owner, 
+            _token_address, 
+            identity_registry_address, 
+            _identity_storage_address, 
+            _compliance_address, 
+            _claim_topics_registry_address, 
+            _trusted_issuers_registry_address
+        ) = setup_contracts();
+        
+        // Get the identity registry contract dispatcher
+        let identity_registry = IIdentityRegistry::dispatcher(identity_registry_address);
+        
+        // Create a test user
+        let user_address: ContractAddress = contract_address_const::<100>();
+        let identity: felt252 = 123456789;
+        let country: felt252 = 840; // USA
+        
+        // Start prank to act as the owner
+        start_prank(CheatTarget::One(identity_registry_address), owner);
+        
+        // Register the identity
+        identity_registry.register_identity(user_address, identity, country);
+        
+        // Stop prank
+        stop_prank(CheatTarget::One(identity_registry_address));
+        
+        // Check if the identity is registered
+        let registered_identity = identity_registry.get_identity(user_address);
+        assert(registered_identity == identity, 'Identity not registered');
+        
+        // Check if the country is set correctly
+        let registered_country = identity_registry.get_country(user_address);
+        assert(registered_country == country, 'Country not set correctly');
+        
+        // Check if the address is verified
+        let is_verified = identity_registry.is_verified_address(user_address);
+        assert(is_verified, 'Address should be verified');
+    }
+
+    #[test]
+    fn test_token_minting() {
+        // Deploy all contracts
+        let (
+            owner, 
+            token_address, 
+            identity_registry_address, 
+            _identity_storage_address, 
+            _compliance_address, 
+            _claim_topics_registry_address, 
+            _trusted_issuers_registry_address
+        ) = setup_contracts();
+        
+        // Get the token contract dispatcher
+        let token = IERC3643Token::dispatcher(token_address);
+        
+        // Get the identity registry contract dispatcher
+        let identity_registry = IIdentityRegistry::dispatcher(identity_registry_address);
+        
+        // Create a test user
+        let user_address: ContractAddress = contract_address_const::<100>();
+        let identity: felt252 = 123456789;
+        let country: felt252 = 840; // USA
+        
+        // Start prank to act as the owner for identity registry
+        start_prank(CheatTarget::One(identity_registry_address), owner);
+        
+        // Register the identity
+        identity_registry.register_identity(user_address, identity, country);
+        
+        // Stop prank
+        stop_prank(CheatTarget::One(identity_registry_address));
+        
+        // Start prank to act as the owner for token
+        start_prank(CheatTarget::One(token_address), owner);
+        
+        // Mint tokens to the user
+        let amount: u256 = 1000000000000000000000; // 1000 tokens with 18 decimals
+        token.mint(user_address, amount);
+        
+        // Stop prank
+        stop_prank(CheatTarget::One(token_address));
+        
+        // Check the user's balance
+        let balance = token.balance_of(user_address);
+        assert(balance == amount, 'Invalid balance after minting');
+        
+        // Check the total supply
+        let total_supply = token.total_supply();
+        assert(total_supply == amount, 'Invalid total supply after minting');
+    }
+
+    #[test]
+    #[should_panic(expected: ('Recipient not verified',))]
+    fn test_mint_to_unverified_address() {
+        // Deploy all contracts
+        let (
+            owner, 
+            token_address, 
+            _identity_registry_address, 
+            _identity_storage_address, 
+            _compliance_address, 
+            _claim_topics_registry_address, 
+            _trusted_issuers_registry_address
+        ) = setup_contracts();
+        
+        // Get the token contract dispatcher
+        let token = IERC3643Token::dispatcher(token_address);
+        
+        // Create an unverified test user
+        let user_address: ContractAddress = contract_address_const::<100>();
+        
+        // Start prank to act as the owner
+        start_prank(CheatTarget::One(token_address), owner);
+        
+        // Try to mint tokens to the unverified user (should fail)
+        let amount: u256 = 1000000000000000000000; // 1000 tokens with 18 decimals
+        token.mint(user_address, amount);
+        
+        // Stop prank (we won't reach here because of the panic)
+        stop_prank(CheatTarget::One(token_address));
+    }
+
+    // Deploy all contracts for testing
+    fn setup_contracts() -> (
+        ContractAddress, // owner
+        ContractAddress, // token
+        ContractAddress, // identity_registry
+        ContractAddress, // identity_storage
+        ContractAddress, // compliance
+        ContractAddress, // claim_topics_registry
+        ContractAddress  // trusted_issuers_registry
+    ) {
+        // Define the owner address
+        let owner: ContractAddress = contract_address_const::<1>();
+        
+        // Declare the contracts
+        let claim_topics_registry_class = declare("ClaimTopicsRegistry");
+        let trusted_issuers_registry_class = declare("TrustedIssuersRegistry");
+        let identity_storage_class = declare("IdentityStorage");
+        let identity_registry_class = declare("IdentityRegistry");
+        let compliance_class = declare("Compliance");
+        let token_class = declare("ERC3643Token");
+        
+        // Deploy the ClaimTopicsRegistry contract
+        let claim_topics_registry_address = claim_topics_registry_class.deploy(@array![owner.into()]).unwrap();
+        
+        // Deploy the TrustedIssuersRegistry contract
+        let trusted_issuers_registry_address = trusted_issuers_registry_class.deploy(@array![owner.into()]).unwrap();
+        
+        // Deploy the Identity Storage contract
+        let identity_storage_address = identity_storage_class.deploy(@array![owner.into()]).unwrap();
+        
+        // Deploy the Identity Registry contract with constructor arguments
+        let identity_registry_address = identity_registry_class.deploy(
+            @array![
+                owner.into(),
+                identity_storage_address.into(),
+                trusted_issuers_registry_address.into(),
+                claim_topics_registry_address.into()
+            ]
+        ).unwrap();
+        
+        // Deploy the Compliance contract
+        let compliance_address = compliance_class.deploy(@array![owner.into()]).unwrap();
+        
+        // Deploy the Token contract with constructor arguments
+        let token_address = token_class.deploy(
+            @array![
+                NAME.into(),
+                SYMBOL.into(),
+                owner.into(),
+                compliance_address.into(),
+                identity_registry_address.into()
+            ]
+        ).unwrap();
+        
+        // Configure the contracts
+        // Set registry in Identity Storage
+        let identity_storage = IIdentityStorage::dispatcher(identity_storage_address);
+        start_prank(CheatTarget::One(identity_storage_address), owner);
+        let _ = identity_storage.transfer_ownership(identity_registry_address);
+        stop_prank(CheatTarget::One(identity_storage_address));
+        
+        (
+            owner,
+            token_address,
+            identity_registry_address,
+            identity_storage_address,
+            compliance_address,
+            claim_topics_registry_address, 
+            trusted_issuers_registry_address
+        )
+    }
+}

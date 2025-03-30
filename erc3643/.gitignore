@@ -1,0 +1,45 @@
+# Generated Starknet artifacts
+/target
+**/*.contract_class.json
+**/*.sierra.json
+**/*.casm.json
+**/*.starknet_artifacts.json
+
+# Scarb's dependency directory
+.scarb/
+
+# Sierra artifacts
+sierra/
+
+# Build artifacts
+/build
+
+# SNFoundry and SNForge artifacts
+.snfoundry/
+.snfoundry_cache/
+.snforge/
+.snforge_cache/
+.snforge_coverage/
+snforge_test_cache/
+
+# IDE Files
+.vscode/
+.idea/
+*.iml
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Debug logs
+debug/
+*.log
+
+# Temporary files
+*.swp
+*.swo
+*~

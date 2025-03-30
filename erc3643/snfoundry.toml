@@ -1,0 +1,18 @@
+# Visit https://foundry-rs.github.io/starknet-foundry/appendix/snfoundry-toml.html
+# and https://foundry-rs.github.io/starknet-foundry/projects/configuration.html for more information
+
+[profile.default]
+src = "src"
+test = "tests"
+out = "target"
+
+# [sncast.default]
+# account = "devnet_account"
+# accounts-file = "~/.starknet_accounts/starknet_open_zeppelin_accounts.json"
+# url = "http://127.0.0.1:5050"
+
+[sncast.sepolia]
+account = "fcx_account"
+accounts-file = "~/.starknet_accounts/starknet_open_zeppelin_accounts.json"
+network = "sepolia"
+

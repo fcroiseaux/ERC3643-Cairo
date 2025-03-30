@@ -1,0 +1,389 @@
+use stark3643::token::{IERC3643Token, ERC3643Token};
+use stark3643::identity_registry::{IIdentityRegistry, IdentityRegistry};
+use stark3643::identity_storage::{IIdentityStorage, IdentityStorage};
+use stark3643::compliance::{ICompliance, Compliance, IComplianceRule};
+use stark3643::claim_topics_registry::{IClaimTopicsRegistry, ClaimTopicsRegistry};
+use stark3643::trusted_issuers_registry::{ITrustedIssuersRegistry, TrustedIssuersRegistry};
+
+use openzeppelin::token::erc20::interface::IERC20;
+use openzeppelin::access::ownable::interface::IOwnable;
+use starknet::{ContractAddress, contract_address_const, get_caller_address};
+use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
+use array::ArrayTrait;
+
+// Import snforge for testing
+use snforge_std::{
+    declare, ContractClassTrait, 
+    start_prank, stop_prank, start_warp, stop_warp,
+    CheatTarget, spy_events, SpyOn, EventSpy, EventAssertions
+};
+
+// Basic transfer rule implementation for testing
+#[starknet::interface]
+trait ICountryTransferRule<TContractState> {
+    fn check_compliance(
+        self: @TContractState, 
+        from: ContractAddress, 
+        to: ContractAddress, 
+        amount: u256
+    ) -> bool;
+    fn set_allowed_country(ref self: TContractState, country: felt252) -> bool;
+    fn get_allowed_country(self: @TContractState) -> felt252;
+}
+
+#[starknet::contract]
+mod CountryTransferRule {
+    use super::*;
+    use starknet::{ContractAddress, get_caller_address};
+
+    #[storage]
+    struct Storage {
+        allowed_country: felt252,
+        identity_registry: ContractAddress,
+    }
+
+    #[constructor]
+    fn constructor(ref self: ContractState, identity_registry: ContractAddress) {
+        self.identity_registry.write(identity_registry);
+        // Default to USA (840)
+        self.allowed_country.write(840);
+    }
+
+    // Define a private helper function to check compliance
+    fn check_country_compliance(
+        self: @ContractState, 
+        from: ContractAddress, 
+        to: ContractAddress
+    ) -> bool {
+        // Get the identity registry
+        let identity_registry = self.identity_registry.read();
+        
+        // Get dispatcher for identity registry - using the imported IIdentityRegistry
+        let registry = IIdentityRegistry::dispatcher(identity_registry);
+        
+        // Check countries for both addresses - use get_country method from IdentityRegistry
+        let from_country = registry.get_country(from);
+        let to_country = registry.get_country(to);
+        
+        // Get the allowed country
+        let allowed_country = self.allowed_country.read();
+        
+        // Both countries must be allowed
+        from_country == allowed_country && to_country == allowed_country
+    }
+
+    #[abi(embed_v0)]
+    impl ComplianceRuleImpl of super::IComplianceRule<ContractState> {
+        fn check_compliance(
+            self: @ContractState, 
+            from: ContractAddress, 
+            to: ContractAddress, 
+            amount: u256
+        ) -> bool {
+            check_country_compliance(self, from, to)
+        }
+    }
+
+    #[abi(embed_v0)]
+    impl CountryTransferRuleImpl of super::ICountryTransferRule<ContractState> {        
+        fn set_allowed_country(ref self: ContractState, country: felt252) -> bool {
+            self.allowed_country.write(country);
+            true
+        }
+        
+        fn get_allowed_country(self: @ContractState) -> felt252 {
+            self.allowed_country.read()
+        }
+    }
+}
+
+// Declare test constants
+const NAME: felt252 = 'T-REX Token';
+const SYMBOL: felt252 = 'TREX';
+const USA_COUNTRY_CODE: felt252 = 840; // USA
+const CANADA_COUNTRY_CODE: felt252 = 124; // Canada
+const UK_COUNTRY_CODE: felt252 = 826; // UK
+
+// Setup function similar to the one in test_token.cairo
+fn setup_contracts_with_rule() -> (
+    ContractAddress, // owner
+    ContractAddress, // token
+    ContractAddress, // identity_registry
+    ContractAddress, // identity_storage
+    ContractAddress, // compliance
+    ContractAddress, // claim_topics_registry
+    ContractAddress, // trusted_issuers_registry
+    ContractAddress  // country_transfer_rule
+) {
+    // Define the owner address
+    let owner: ContractAddress = contract_address_const::<1>();
+    
+    // Declare the contracts
+    let claim_topics_registry_class = declare("ClaimTopicsRegistry");
+    let trusted_issuers_registry_class = declare("TrustedIssuersRegistry");
+    let identity_storage_class = declare("IdentityStorage");
+    let identity_registry_class = declare("IdentityRegistry");
+    let compliance_class = declare("Compliance");
+    let token_class = declare("ERC3643Token");
+    let rule_class = declare("CountryTransferRule");
+    
+    // Deploy the ClaimTopicsRegistry contract
+    let claim_topics_registry_address = claim_topics_registry_class.deploy(@array![owner.into()]).unwrap();
+    
+    // Deploy the TrustedIssuersRegistry contract
+    let trusted_issuers_registry_address = trusted_issuers_registry_class.deploy(@array![owner.into()]).unwrap();
+    
+    // Deploy the Identity Storage contract
+    let identity_storage_address = identity_storage_class.deploy(@array![owner.into()]).unwrap();
+    
+    // Deploy the Identity Registry contract with constructor arguments
+    let identity_registry_address = identity_registry_class.deploy(
+        @array![
+            owner.into(),
+            identity_storage_address.into(),
+            trusted_issuers_registry_address.into(),
+            claim_topics_registry_address.into()
+        ]
+    ).unwrap();
+    
+    // Deploy the Compliance contract
+    let compliance_address = compliance_class.deploy(@array![owner.into()]).unwrap();
+    
+    // Deploy the Token contract with constructor arguments
+    let token_address = token_class.deploy(
+        @array![
+            NAME.into(),
+            SYMBOL.into(),
+            owner.into(),
+            compliance_address.into(),
+            identity_registry_address.into()
+        ]
+    ).unwrap();
+    
+    // Deploy the Country Transfer Rule
+    let rule_address = rule_class.deploy(
+        @array![
+            identity_registry_address.into()
+        ]
+    ).unwrap();
+    
+    // Configure the contracts
+    // Set registry in Identity Storage
+    let identity_storage = IIdentityStorage::dispatcher(identity_storage_address);
+    start_prank(CheatTarget::One(identity_storage_address), owner);
+    let _ = identity_storage.transfer_ownership(identity_registry_address);
+    stop_prank(CheatTarget::One(identity_storage_address));
+    
+    // Add the rule to compliance
+    let compliance = ICompliance::dispatcher(compliance_address);
+    start_prank(CheatTarget::One(compliance_address), owner);
+    let _ = compliance.add_rule(rule_address);
+    stop_prank(CheatTarget::One(compliance_address));
+    
+    (
+        owner,
+        token_address,
+        identity_registry_address,
+        identity_storage_address,
+        compliance_address,
+        claim_topics_registry_address, 
+        trusted_issuers_registry_address,
+        rule_address
+    )
+}
+
+#[test]
+fn test_compliance_with_country_rule() {
+    // Deploy all contracts with the country rule
+    let (
+        owner,
+        token_address,
+        identity_registry_address,
+        identity_storage_address,
+        compliance_address,
+        claim_topics_registry_address,
+        trusted_issuers_registry_address,
+        rule_address
+    ) = setup_contracts_with_rule();
+    
+    // Get contract dispatchers
+    let token = IERC3643Token::dispatcher(token_address);
+    let identity_registry = IIdentityRegistry::dispatcher(identity_registry_address);
+    let compliance = ICompliance::dispatcher(compliance_address);
+    let rule = ICountryTransferRule::dispatcher(rule_address);
+    
+    // Create two test users - both in USA
+    let user1: ContractAddress = contract_address_const::<100>();
+    let user2: ContractAddress = contract_address_const::<101>();
+    let identity1: felt252 = 123456789;
+    let identity2: felt252 = 987654321;
+    
+    // Register identities
+    start_prank(CheatTarget::One(identity_registry_address), owner);
+    identity_registry.register_identity(user1, identity1, USA_COUNTRY_CODE);
+    identity_registry.register_identity(user2, identity2, USA_COUNTRY_CODE);
+    stop_prank(CheatTarget::One(identity_registry_address));
+    
+    // Mint tokens to user1
+    start_prank(CheatTarget::One(token_address), owner);
+    let amount: u256 = 1000000000000000000000; // 1000 tokens with 18 decimals
+    token.mint(user1, amount);
+    stop_prank(CheatTarget::One(token_address));
+    
+    // Setup for event spying
+    let mut spy = spy_events(SpyOn::All);
+    
+    // Transfer tokens from user1 to user2 (should succeed since both are in USA)
+    start_prank(CheatTarget::One(token_address), user1);
+    let transfer_amount: u256 = 100000000000000000000; // 100 tokens
+    token.transfer(user2, transfer_amount);
+    stop_prank(CheatTarget::One(token_address));
+    
+    // Check balances after transfer
+    let user1_balance = token.balance_of(user1);
+    let user2_balance = token.balance_of(user2);
+    assert(user1_balance == amount - transfer_amount, 'Invalid sender balance');
+    assert(user2_balance == transfer_amount, 'Invalid recipient balance');
+    
+    // Check that the Transfer event was emitted
+    spy.assert_emitted(@array![
+        (
+            token_address, 
+            selector!("Transfer"), 
+            @array![user1.into(), user2.into(), transfer_amount.low.into(), transfer_amount.high.into()]
+        )
+    ]);
+}
+
+#[test]
+#[should_panic(expected: ('Transfer not compliant',))]
+fn test_compliance_fails_with_different_country() {
+    // Deploy all contracts with the country rule
+    let (
+        owner,
+        token_address,
+        identity_registry_address,
+        identity_storage_address,
+        compliance_address,
+        claim_topics_registry_address,
+        trusted_issuers_registry_address,
+        rule_address
+    ) = setup_contracts_with_rule();
+    
+    // Get contract dispatchers
+    let token = IERC3643Token::dispatcher(token_address);
+    let identity_registry = IIdentityRegistry::dispatcher(identity_registry_address);
+    let compliance = ICompliance::dispatcher(compliance_address);
+    let rule = ICountryTransferRule::dispatcher(rule_address);
+    
+    // Create two test users - one in USA, one in Canada
+    let user1: ContractAddress = contract_address_const::<100>();
+    let user2: ContractAddress = contract_address_const::<101>();
+    let identity1: felt252 = 123456789;
+    let identity2: felt252 = 987654321;
+    
+    // Register identities
+    start_prank(CheatTarget::One(identity_registry_address), owner);
+    identity_registry.register_identity(user1, identity1, USA_COUNTRY_CODE);
+    identity_registry.register_identity(user2, identity2, CANADA_COUNTRY_CODE);
+    stop_prank(CheatTarget::One(identity_registry_address));
+    
+    // Mint tokens to user1
+    start_prank(CheatTarget::One(token_address), owner);
+    let amount: u256 = 1000000000000000000000; // 1000 tokens with 18 decimals
+    token.mint(user1, amount);
+    stop_prank(CheatTarget::One(token_address));
+    
+    // Try to transfer tokens from user1 to user2 (should fail due to country rule)
+    start_prank(CheatTarget::One(token_address), user1);
+    let transfer_amount: u256 = 100000000000000000000; // 100 tokens
+    token.transfer(user2, transfer_amount);  // This should panic
+    stop_prank(CheatTarget::One(token_address));
+}
+
+#[test]
+fn test_updating_compliance_rule() {
+    // Deploy all contracts with the country rule
+    let (
+        owner,
+        token_address,
+        identity_registry_address,
+        identity_storage_address,
+        compliance_address,
+        claim_topics_registry_address,
+        trusted_issuers_registry_address,
+        rule_address
+    ) = setup_contracts_with_rule();
+    
+    // Get contract dispatchers
+    let token = IERC3643Token::dispatcher(token_address);
+    let identity_registry = IIdentityRegistry::dispatcher(identity_registry_address);
+    let compliance = ICompliance::dispatcher(compliance_address);
+    let rule = ICountryTransferRule::dispatcher(rule_address);
+    
+    // Create two test users - one in USA, one in UK
+    let user1: ContractAddress = contract_address_const::<100>();
+    let user2: ContractAddress = contract_address_const::<101>();
+    let identity1: felt252 = 123456789;
+    let identity2: felt252 = 987654321;
+    
+    // Register identities
+    start_prank(CheatTarget::One(identity_registry_address), owner);
+    identity_registry.register_identity(user1, identity1, USA_COUNTRY_CODE);
+    identity_registry.register_identity(user2, identity2, UK_COUNTRY_CODE);
+    stop_prank(CheatTarget::One(identity_registry_address));
+    
+    // Mint tokens to user1
+    start_prank(CheatTarget::One(token_address), owner);
+    let amount: u256 = 1000000000000000000000; // 1000 tokens with 18 decimals
+    token.mint(user1, amount);
+    stop_prank(CheatTarget::One(token_address));
+    
+    // Update the rule to allow UK instead of USA
+    start_prank(CheatTarget::One(rule_address), owner);
+    rule.set_allowed_country(UK_COUNTRY_CODE);
+    stop_prank(CheatTarget::One(rule_address));
+    
+    // Verify the rule was updated
+    let allowed_country = rule.get_allowed_country();
+    assert(allowed_country == UK_COUNTRY_CODE, 'Rule not updated correctly');
+    
+    // Try to transfer from user1 (USA) to user2 (UK) - should fail
+    start_prank(CheatTarget::One(token_address), user1);
+    let transfer_amount: u256 = 100000000000000000000; // 100 tokens
+    
+    // We expect this to fail, but we'll catch the panic to continue the test
+    let mut success = false;
+    match core::internal::panic_with_felt252(core::option::Option::None) {
+        core::internal::PanicResult::Ok => {
+            match token.transfer(user2, transfer_amount) {
+                true => { success = true; },
+                false => {}
+            }
+        },
+        core::internal::PanicResult::Err(_) => {}
+    };
+    
+    assert(!success, 'Transfer should have failed');
+    stop_prank(CheatTarget::One(token_address));
+    
+    // Update user1's country to UK
+    start_prank(CheatTarget::One(identity_registry_address), owner);
+    identity_registry.update_country(user1, UK_COUNTRY_CODE);
+    stop_prank(CheatTarget::One(identity_registry_address));
+    
+    // Check that the country was updated
+    let new_country = identity_registry.get_country(user1);
+    assert(new_country == UK_COUNTRY_CODE, 'Country not updated');
+    
+    // Now try the transfer again - should succeed
+    start_prank(CheatTarget::One(token_address), user1);
+    token.transfer(user2, transfer_amount);
+    stop_prank(CheatTarget::One(token_address));
+    
+    // Check balances after transfer
+    let user1_balance = token.balance_of(user1);
+    let user2_balance = token.balance_of(user2);
+    assert(user1_balance == amount - transfer_amount, 'Invalid sender balance');
+    assert(user2_balance == transfer_amount, 'Invalid recipient balance');
+}

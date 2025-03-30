@@ -1,0 +1,27 @@
+[profile.default]
+# Set the default number of test cases to generate when fuzzing
+fuzz_runs = 256
+
+# Set the default seed for fuzzing
+fuzz_seed = 42
+
+# Print the gas usage for each test
+gas_report = true
+
+# Print execution traces for failing tests
+verbosity = 1
+
+# Enable the use of the debug feature
+debug = true
+
+[profile.ci]
+# CI profile with extended fuzzing
+fuzz_runs = 1024
+verbosity = 2
+gas_report = true
+
+[profile.light]
+# Light profile for quick test runs
+fuzz_runs = 32
+verbosity = 0
+gas_report = false

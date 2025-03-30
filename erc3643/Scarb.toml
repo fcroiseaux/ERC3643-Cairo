@@ -1,0 +1,23 @@
+[package]
+name = "erc3643"
+version = "0.1.0"
+edition = "2024_07"
+description = "StarkNet implementation of the ERC3643 T-REX standard"
+
+[dependencies]
+starknet = "2.11.2"
+openzeppelin = "1.0.0"
+
+[dev-dependencies]
+#cairo_test = "2.9.2"
+snforge_std = "0.38.3"
+assert_macros = "2.11.2"
+
+[[target.starknet-contract]]
+sierra = true
+
+[scripts]
+test = "snforge test"
+
+[tool.scarb]
+allow-prebuilt-plugins = ["snforge_std"]
