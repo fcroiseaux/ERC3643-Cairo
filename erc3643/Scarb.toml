@@ -6,7 +6,7 @@ description = "StarkNet implementation of the ERC3643 T-REX standard"
 
 [dependencies]
 starknet = "2.11.2"
-openzeppelin = "1.0.0"
+openzeppelin = { git = "https://github.com/OpenZeppelin/cairo-contracts.git", tag = "v2.0.0-alpha.0" }
 
 [dev-dependencies]
 #cairo_test = "2.9.2"

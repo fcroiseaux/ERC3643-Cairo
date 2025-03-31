@@ -1,0 +1,38 @@
+[package]
+name = "solana-erc3643"
+version = "0.1.0"
+edition = "2021"
+description = "Solana implementation of the ERC3643 (T-REX) standard"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "solana_erc3643"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+solana-program = "1.18.3"
+thiserror = "1.0.56"
+borsh = "0.10.3"
+borsh-derive = "0.10.3"
+spl-token = { version = "4.0.0", features = ["no-entrypoint"] }
+spl-associated-token-account = { version = "2.3.0", features = ["no-entrypoint"] }
+
+[dev-dependencies]
+solana-program-test = "1.18.3"
+solana-sdk = "1.18.3"
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1

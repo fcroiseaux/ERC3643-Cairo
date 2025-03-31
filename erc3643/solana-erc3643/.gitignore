@@ -1,0 +1,29 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# Solana
+.anchor
+.DS_Store
+node_modules
+test-ledger
+.yarn
+
+# IDE files
+.idea/
+.vscode/
+*.iml
+
+# Build artifacts
+dist/
+build/
+*.so
+
+# Environment variables
+.env
+.env.local
+
+# Other
+*.swp
+*~
